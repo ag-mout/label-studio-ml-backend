@@ -1,0 +1,27 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Python Debugger: Attach using Process Id",
+            "type": "debugpy",
+            "request": "attach",
+            "processId": "${command:pickProcess}",
+            "justMyCode": false,
+        },
+
+        {
+    "name": "Gunicorn WSGI",
+    "type": "debugpy",
+    "request": "launch",
+    "module": "gunicorn",
+    "cwd": "/app",
+    "args": [
+"--preload", "--bind", ":9090", "--workers", "1", "--threads", "8", "--timeout", "0", "_wsgi:app"
+]
+}
+    ]
+}
