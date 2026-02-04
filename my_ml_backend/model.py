@@ -1,75 +1,117 @@
+import os
+import logging
 from typing import List, Dict, Optional
 from label_studio_ml.model import LabelStudioMLBase
 from label_studio_ml.response import ModelResponse
+import whisper
 
+logger = logging.getLogger(__name__)
 
-class NewModel(LabelStudioMLBase):
-    """Custom ML Backend model
-    """
+# Get model name from environment or use default
+model_name = os.getenv('MODEL_NAME', 'base')
+language = os.getenv('LANGUAGE', 'pt')
+
+logger.info(f"Loading Whisper model: {model_name}")
+model = whisper.load_model(model_name)
+logger.info("Model loaded successfully")
+
+class WhisperASRModel(LabelStudioMLBase):
+    """Whisper ASR model for Label Studio"""
     
-    def setup(self):
-        """Configure any parameters of your model here
-        """
-        self.set("model_version", "0.0.1")
+    def __init__(self, **kwargs):
+        super(WhisperASRModel, self).__init__(**kwargs)
+        
+        self.language = language
+        self.model = model
+        
+        # Cache the model info
+        self.model_name = model_name
+        self.set("model_version", model_name)
+
 
     def predict(self, tasks: List[Dict], context: Optional[Dict] = None, **kwargs) -> ModelResponse:
-        """ Write your inference logic here
+        """
+        Predict transcriptions for audio files.
             :param tasks: [Label Studio tasks in JSON format](https://labelstud.io/guide/task_format.html)
             :param context: [Label Studio context in JSON format](https://labelstud.io/guide/ml_create#Implement-prediction-logic)
             :return model_response
                 ModelResponse(predictions=predictions) with
                 predictions: [Predictions array in JSON format](https://labelstud.io/guide/export.html#Label-Studio-JSON-format-of-annotated-tasks)
         """
-        print(f'''\
-        Run prediction on {tasks}
-        Received context: {context}
-        Project ID: {self.project_id}
-        Label config: {self.label_config}
-        Parsed JSON Label config: {self.parsed_label_config}
-        Extra params: {self.extra_params}''')
-
-        # example for resource downloading from Label Studio instance,
-        # you need to set env vars LABEL_STUDIO_URL and LABEL_STUDIO_API_KEY
-        # path = self.get_local_path(tasks[0]['data']['image_url'], task_id=tasks[0]['id'])
-
-        # example for simple classification
-        # return [{
-        #     "model_version": self.get("model_version"),
-        #     "score": 0.12,
-        #     "result": [{
-        #         "id": "vgzE336-a8",
-        #         "from_name": "sentiment",
-        #         "to_name": "text",
-        #         "type": "choices",
-        #         "value": {
-        #             "choices": [ "Negative" ]
-        #         }
-        #     }]
-        # }]
+        predictions = []
         
-        return ModelResponse(predictions=[])
+        for task in tasks:
+            try:
+                # Get the audio URL from task data
+                audio_url = task['data'].get('audio', '')
+                
+                if not audio_url:
+                    logger.warning(f"No audio URL found in task {task.get('id')}")
+                    predictions.append({'result': []})
+                    continue
+                
+                # # Get local path (Label Studio provides this)
+                # audio_path = self.get_local_path(audio_url)
+                audio_path = r"/label-studio/data/media/" + audio_url.strip(r"/data/")
+                
+                if not audio_path or not os.path.exists(audio_path):
+                    logger.error(f"Audio file not found: {audio_path}")
+                    predictions.append({'result': []})
+                    continue
+                
+                logger.info(f"Transcribing: {audio_path}")
+                
+                # Transcribe with Whisper
+                result = self.model.transcribe(
+                    audio_path,
+                    language=self.language,
+                    word_timestamps=True
+                )
+
+                segments = []
+                for segment in result["segments"]:
+                    for word in segment.get("words", []):
+                        segments.append({
+                            'value': {
+                                "start": word["start"],
+                                "end": word["end"],
+                                'text': word["word"],
+                            },
+                            'from_name': 'transcription',
+                            'to_name': 'audio',
+                            'type': 'textarea'
+                        })
+                    
+            
+                # Format prediction for Label Studio
+                prediction = {
+                    'result': segments,
+                    'score': self._calculate_confidence(result)
+                }
+                
+                predictions.append(prediction)
+                logger.info(f"Transcription complete: {result['text'][:50]}...")
+                
+            except Exception as e:
+                logger.error(f"Error processing task: {str(e)}", exc_info=True)
+                predictions.append({'result': []})
+        
+        return ModelResponse(predictions=predictions)
+    
+    def _calculate_confidence(self, result: Dict) -> float:
+        """Calculate average confidence from segments"""
+        segments = result.get('segments', [])
+        if not segments:
+            return 0.9  # Default confidence
+        
+        # Average the 'no_speech_prob' as inverse confidence
+        confidences = [1.0 - seg.get('no_speech_prob', 0.5) for seg in segments]
+        return sum(confidences) / len(confidences) if confidences else 0.9
     
     def fit(self, event, data, **kwargs):
         """
-        This method is called each time an annotation is created or updated
-        You can run your logic here to update the model and persist it to the cache
-        It is not recommended to perform long-running operations here, as it will block the main thread
-        Instead, consider running a separate process or a thread (like RQ worker) to perform the training
-        :param event: event type can be ('ANNOTATION_CREATED', 'ANNOTATION_UPDATED', 'START_TRAINING')
-        :param data: the payload received from the event (check [Webhook event reference](https://labelstud.io/guide/webhook_reference.html))
+        Fine-tune the model (optional - for future implementation)
+        This is called when you train the model from Label Studio
         """
-
-        # use cache to retrieve the data from the previous fit() runs
-        old_data = self.get('my_data')
-        old_model_version = self.get('model_version')
-        print(f'Old data: {old_data}')
-        print(f'Old model version: {old_model_version}')
-
-        # store new data to the cache
-        self.set('my_data', 'my_new_data_value')
-        self.set('model_version', 'my_new_model_version')
-        print(f'New data: {self.get("my_data")}')
-        print(f'New model version: {self.get("model_version")}')
-
-        print('fit() completed successfully.')
-
+        logger.info("Fit method called - fine-tuning not implemented yet")
+        return {'model_version': self.model_name}
