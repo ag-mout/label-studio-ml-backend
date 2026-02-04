@@ -23,15 +23,22 @@ RUN --mount=type=cache,target="/var/cache/apt",sharing=locked \
         git; \
     apt-get autoremove -y
 
+# Install system dependencies for audio processing
+RUN apt-get update && apt-get install -y \
+    ffmpeg libpq-dev gcc
+
 # install base requirements
 COPY requirements-base.txt .
 RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
     pip install -r requirements-base.txt
 
-# install custom requirements
-COPY requirements.txt .
 RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
-    pip install -r requirements.txt
+    pip cache purge
+
+# install custom requirements
+COPY requirements.txt requirements-pytorch.txt ./
+RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
+    pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # install test requirements if needed
 COPY requirements-test.txt .
@@ -43,6 +50,10 @@ RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
 
 COPY . .
 
+# Download model at build time (optional, speeds up startup)
+RUN python -c "import whisper; whisper.load_model('base')"
+
 EXPOSE 9090
 
+# CMD sleep infinity
 CMD gunicorn --preload --bind :$PORT --workers $WORKERS --threads $THREADS --timeout 0 _wsgi:app
